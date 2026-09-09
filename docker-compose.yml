@@ -1,0 +1,35 @@
+#Author : Paarth Sharma
+#File Name : docker-compose.yml
+#Project Name : swiftJEPA
+#Creation Date : 8th September 2026
+#Modification Date : 9th September 2026
+#Description : Dev container service definition for swiftJEPA
+
+services:
+  dev:
+    # Build from the local Dockerfile with a name for easy reuse
+    build: .
+    image: vjepa-inference-engine
+
+    # Expose host GPUs (needs the nvidia-container-toolkit)
+    gpus: all
+
+    # Bind-mount the project so edits apply immediately and outputs land on the host; The named volume stores compiled extensions across all the containers 
+    volumes:
+      - .:/workspace
+      - torch-ext-cache:/root/.cache/torch_extensions
+    working_dir: /workspace
+
+    # Cache multi-GB checkpoints in the mount so they survive restarts
+    environment:
+      TORCH_HOME: /workspace/.torch-cache
+
+    # Interactive shell interface for docker compose run
+    stdin_open: true
+    tty: true
+
+    # Pinned-memory dataloading needs more than Docker's 64 MB /dev/shm default
+    shm_size: 6gb
+
+volumes:
+  torch-ext-cache:
