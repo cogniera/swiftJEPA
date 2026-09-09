@@ -15,4 +15,5 @@ PyTorch pipeline delivers.
 ## License 
 
 MIT: See [LICENSE](LICENSE) for more details 
-
+Third-party terms, including Meta's MIT license and other licensing agreements 
+for the vendored `vjepa2/`, are recorded in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
