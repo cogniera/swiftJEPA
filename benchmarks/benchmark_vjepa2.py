@@ -272,8 +272,54 @@ def save_outputs(args, results, out_dir):
     return summary
 
 
+def stage_time(item):
+    return item[1]
+
+
 def main():
-    pass
+    args = parse_args()
+
+    # this timestamp makes sure every run gets its own new folder instead of overwriting the last one.
+    tag = f"{args.model}_{args.frames}f_b{args.batch}_{args.dtype}_{datetime.now():%Y%m%d_%H%M%S}"
+
+    if args.out:
+        out_dir = Path(args.out)
+    else:
+        out_dir = HERE / "results" / tag
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"device: {args.device}", flush=True)
+    if args.device.startswith("cuda"):
+        print(f"gpu: {torch.cuda.get_device_name(0)}")
+    print(f"building {args.model} (pretrained={args.pretrained})", flush=True)
+
+    encoder, img_size = build_encoder(args)
+
+    n_params = 0
+    for p in encoder.parameters():
+        n_params += p.numel()
+    print(f"encoder params: {n_params/1e6:.1f}M, input {args.frames}x{img_size}x{img_size}")
+
+    results = run_benchmark(args, encoder, img_size, out_dir)
+    summary = save_outputs(args, results, out_dir)
+
+    print(f"\ngpu_total_ms mean={summary['gpu_total_ms_mean']:.2f} "
+          f"p95={summary['gpu_total_ms_p95']:.2f} "
+          f"throughput={summary['throughput_clips_per_s']:.2f} clips/s")
+
+    # this sorts the stages slowest first so we only print the top five.
+    stage_items = list(summary["stage_mean_ms"].items())
+    stage_items.sort(key=stage_time, reverse=True)
+    slowest = stage_items[:5]
+
+    slowest_text = ""
+    for name, ms in slowest:
+        if slowest_text != "":
+            slowest_text += ", "
+        slowest_text += f"{name}={ms:.2f}ms"
+    print("slowest stages:", slowest_text)
+
+    print(f"\noutputs | {out_dir}")
 
 
 if __name__ == "__main__":
