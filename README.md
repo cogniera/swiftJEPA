@@ -12,6 +12,13 @@ PyTorch pipeline delivers.
 2.  Deal with the bottlenecks one at a time against the reference implementation.
 3.  Re-measure after change and hold what's reproducible under the benchmarking harness.
 
+## Layout
+
+| Path | Contents |
+|---|---|
+| `vjepa2/` | vendored upstream V-JEPA 2 repo (Meta, MIT) |
+| `benchmarks/` | latency harness for the encoder |
+
 ## License 
 
 MIT: See [LICENSE](LICENSE) for more details 
