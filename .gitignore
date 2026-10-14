@@ -1,7 +1,22 @@
+#Author : Paarth Sharma
+#File Name : .gitignore
+#Project Name : swiftJEPA
+#Creation Date : 8th September 2026
+#Modification Date : 14th October 2026
+#Description : Exclude generated files and reference artifacts from commits.
+
+# Keep local Python state out of source control.
 __pycache__/
 *.pyc
 .venv/
 
+# Checkpoints, reference kernels, and archived runs are never redistributed.
 *.pt
 *.pth
 .torch-cache/
+kernels_for_reuse/
+*.tar.gz
+
+# Retained benchmark runs are added explicitly after review.
+benchmarks/results/
+.benchmarks-tmp/
