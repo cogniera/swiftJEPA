@@ -2534,3 +2534,18 @@ Custom extensions require a toolkit compatible with the resolved torch runtime.
 `d6ba5a4` fixes C4 importing `src` before the vendored root is on `sys.path`.
 The syntax and whitespace checks passed locally; runtime validation follows
 when the remote environment is ready. No new latency or accuracy claims yet.
+
+## Early pretrained quality infrastructure
+
+Added a seven-clip deterministic raw uint8 suite (noise, black, white, mid-gray,
+moving gradient, checkerboard, and color bars). Validation checks every batch
+member and repeats each candidate call, copying reference and candidate outputs
+before compiled graph buffers can be reused. Shape, nonfinite, zero-norm,
+below-threshold, repeated-call corruption, and stale-input failures are explicit.
+Cosine is reduced by the worst clip; relative L2 and absolute errors are retained.
+
+The ten CPU helper tests passed with torch 2.14.0+cpu in an isolated local venv:
+`python -m unittest discover -s benchmarks/tests -p test_accuracy.py -v`.
+This local venv is only for pre-commit CPU tests while Docker Desktop is stopped;
+the 4090/Linux environment remains the sole performance source. Only existing
+repository dependencies were installed. Pretrained GPU accuracy is still pending.
