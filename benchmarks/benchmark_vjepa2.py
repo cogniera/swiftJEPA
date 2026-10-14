@@ -19,7 +19,10 @@ import torch
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 VJEPA2_REPO = ROOT / "vjepa2"
+sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(VJEPA2_REPO))
+
+from benchmarks.pipeline import make_preprocess
 
 PUBLIC_CKPT_URL = "https://dl.fbaipublicfiles.com/vjepa2"
 
@@ -139,20 +142,6 @@ def make_clip(batch, frames, img_size):
     return rng.integers(0, 256, size=shape, dtype=np.uint8)
 
 
-def preprocess(clip_u8):
-    # these are the standard imagenet mean and std values the model was trained with.
-    mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1, 1)
-    std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1, 1)
-
-    x = torch.from_numpy(clip_u8).float()
-    x = x.div_(255.0)
-    # this reorders the frame from batch,time,height,width,color to batch,color,time,height,width.
-    x = x.permute(0, 4, 1, 2, 3)
-    x = (x - mean) / std
-
-    return x.contiguous()
-
-
 def run_benchmark(args, encoder, img_size, out_dir):
     device = torch.device(args.device)
     dtype = DTYPES[args.dtype]
@@ -163,6 +152,8 @@ def run_benchmark(args, encoder, img_size, out_dir):
 
     timer = LayerTimer(encoder, device)
     clip = make_clip(args.batch, args.frames, img_size)
+    # Use the upstream resize, center crop, tensor conversion, and normalization.
+    preprocess = make_preprocess(img_size)
 
     pre_ms = []
     h2d_ms = []

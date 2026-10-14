@@ -2549,3 +2549,13 @@ The ten CPU helper tests passed with torch 2.14.0+cpu in an isolated local venv:
 This local venv is only for pre-commit CPU tests while Docker Desktop is stopped;
 the 4090/Linux environment remains the sole performance source. Only existing
 repository dependencies were installed. Pretrained GPU accuracy is still pending.
+
+## Official preprocessing fidelity
+
+The benchmark now adapts the upstream single-view evaluation transform directly,
+including resize and crop for square model-sized clips. Its eight CPU tests pass
+bit-for-bit against upstream on square, portrait, landscape, batched, and strided
+inputs; constant colors also independently check normalization. The benchmark
+CLI help now runs from the repo without needing an external `PYTHONPATH`.
+Latency reported by the earlier C4 format still excludes CPU work; the next
+commit replaces that format and removes hooks from headline timing.
