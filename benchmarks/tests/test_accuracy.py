@@ -55,6 +55,12 @@ class EmbeddingMetricTests(unittest.TestCase):
 
 # Verify clip generation and sequential validation using tiny CPU encoder callables.
 class EncoderValidationTests(unittest.TestCase):
+    def test_noise_is_the_exact_timed_benchmark_input(self):
+        from benchmarks.benchmark_vjepa2 import make_clip
+
+        _, noise = next(iter_test_clips(frames=3, batch=2, crop_size=8, seed=17))
+        np.testing.assert_array_equal(noise, make_clip(2, 3, 8, seed=17))
+
     @staticmethod
     def preprocess(clip):
         return torch.from_numpy(clip).permute(0, 4, 1, 2, 3).float().contiguous() / 255

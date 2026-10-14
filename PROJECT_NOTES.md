@@ -2606,3 +2606,18 @@ Normalize the CLI default to `cuda:0` while preserving explicit indices, and
 exercise that default in both parser and CUDA tests. Write config/environment
 to `run.json` before model construction so later failures retain provenance.
 This failed attempt has zero latency samples and supplies no performance claim.
+
+## Input and hardware provenance
+
+Record the selected GPU UUID and host in every new run, plus SHA256 of the actual
+raw clip. The timed NumPy noise clip is now also the quality suite's noise clip;
+suite version 2 makes this change explicit. Record crop size and input layout,
+dtype, shape, memory location, and resize semantics. These fields let later
+comparison reject an accidentally different GPU, session, clip, or transform.
+The initial baseline campaign remains useful profile evidence; the final
+compiled-baseline/engine A/B will be remeasured together under the later schema.
+
+The current checkpoint download is 4.78 GiB, superseding the historical size
+estimate. Host memory and disk have adequate headroom (392 GiB available RAM,
+89 GiB free workspace disk at inspection). GPU UUID is
+`abaa5fe0-76a5-6def-ee23-70d8993c1c66`; torch reports 50866487296 memory bytes.

@@ -13,6 +13,7 @@ from __future__ import annotations
 import math
 from numbers import Integral
 from pathlib import Path
+import platform
 import subprocess
 import sys
 
@@ -167,6 +168,7 @@ def collect_environment(root, device):
         "tracked_dirty": bool(status["output"]) if status["available"] else None,
         "git": {"revision": revision, "tracked_status": status},
         "python": sys.version,
+        "hostname": platform.node(),
         "device": str(device),
         "packages": _package_versions(),
         "nvidia_smi": _command_metadata(["nvidia-smi"], root),
@@ -177,7 +179,7 @@ def collect_environment(root, device):
             "opencv": "unavailable",
         },
         "tf32": {"matmul": "unavailable", "cudnn": "unavailable"},
-        "gpu": {"available": False, "reason": "unavailable"},
+        "gpu": {"available": False, "reason": "unavailable", "uuid": None},
         "torch_cuda_version": "unavailable",
     }
 
@@ -199,10 +201,12 @@ def collect_environment(root, device):
             if index is None:
                 index = torch.cuda.current_device()
             properties = torch.cuda.get_device_properties(index)
+            gpu_uuid = getattr(properties, "uuid", None)
             environment["gpu"] = {
                 "available": True,
                 "index": int(index),
                 "name": properties.name,
+                "uuid": str(gpu_uuid) if gpu_uuid is not None else None,
                 "compute_capability": [int(properties.major), int(properties.minor)],
                 "total_memory_bytes": int(properties.total_memory),
                 "multiprocessor_count": int(properties.multi_processor_count),

@@ -140,6 +140,8 @@ class EnvironmentTests(unittest.TestCase):
         self.assertIsNone(environment["tracked_dirty"])
         self.assertFalse(environment["nvidia_smi"]["available"])
         self.assertFalse(environment["nvcc"]["available"])
+        self.assertIsNone(environment["gpu"]["uuid"])
+        self.assertIsInstance(environment["hostname"], str)
         self.assertEqual(environment["cpu_threads"], {"torch": 4, "torch_interop": 2, "opencv": 1})
         self.assertEqual(environment["tf32"], {"matmul": False, "cudnn": True})
         json.dumps(environment, allow_nan=False)
@@ -176,6 +178,7 @@ class EnvironmentTests(unittest.TestCase):
         fake_torch.device = lambda _: SimpleNamespace(type="cuda", index=2)
         properties = SimpleNamespace(
             name="selected GPU",
+            uuid="abaa5fe0-76a5-6def-ee23-70d8993c1c66",
             major=8,
             minor=9,
             total_memory=24 * 1024**3,
@@ -204,11 +207,39 @@ class EnvironmentTests(unittest.TestCase):
                 "available": True,
                 "index": 2,
                 "name": "selected GPU",
+                "uuid": "abaa5fe0-76a5-6def-ee23-70d8993c1c66",
                 "compute_capability": [8, 9],
                 "total_memory_bytes": 24 * 1024**3,
                 "multiprocessor_count": 128,
             },
         )
+        json.dumps(environment, allow_nan=False)
+
+    def test_gpu_uuid_is_none_when_properties_do_not_expose_it(self):
+        fake_torch = self.fake_torch()
+        fake_torch.device = lambda _: SimpleNamespace(type="cuda", index=0)
+        properties = SimpleNamespace(
+            name="GPU without UUID",
+            major=8,
+            minor=9,
+            total_memory=24 * 1024**3,
+            multi_processor_count=128,
+        )
+        fake_torch.cuda = SimpleNamespace(
+            is_available=lambda: True,
+            get_device_properties=lambda _: properties,
+        )
+        fake_cv2 = SimpleNamespace(__version__="test", getNumThreads=lambda: 1)
+        with patch.dict(sys.modules, {"torch": fake_torch, "cv2": fake_cv2}), patch(
+            "benchmarks.reporting._package_versions", return_value={"torch": "test"}
+        ), patch("benchmarks.reporting.subprocess.run", side_effect=FileNotFoundError), patch(
+            "benchmarks.reporting.platform.node", return_value="benchmark-host"
+        ):
+            environment = collect_environment(Path.cwd(), "cuda:0")
+
+        self.assertTrue(environment["gpu"]["available"])
+        self.assertIsNone(environment["gpu"]["uuid"])
+        self.assertEqual(environment["hostname"], "benchmark-host")
         json.dumps(environment, allow_nan=False)
 
 

@@ -22,8 +22,7 @@ def iter_test_clips(
     if min(frames, batch, crop_size) < 1:
         raise ValueError("frames, batch and crop_size must be positive")
     shape = (batch, frames, crop_size, crop_size, 3)
-    generator = torch.Generator(device="cpu").manual_seed(seed)
-    yield "noise", torch.randint(0, 256, shape, generator=generator, dtype=torch.uint8).numpy()
+    yield "noise", np.random.default_rng(seed).integers(0, 256, shape, dtype=np.uint8)
     for name, value in (("black", 0), ("white", 255), ("mid_gray", 128)):
         yield name, torch.full(shape, value, dtype=torch.uint8).numpy()
 
@@ -171,6 +170,6 @@ def validate_encoder(
         "batch": batch,
         "crop_size": crop_size,
         "clip_seed": seed,
-        "clip_suite_version": 1,
+        "clip_suite_version": 2,
         "clips": rows,
     }

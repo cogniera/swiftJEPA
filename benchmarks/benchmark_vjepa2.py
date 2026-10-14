@@ -8,6 +8,7 @@
 import argparse
 import csv
 from datetime import datetime, timezone
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -67,6 +68,7 @@ def parse_args(argv=None):
     if device.type != "cuda":
         parser.error("--device must select a CUDA device")
     args.device = f"cuda:{device.index if device.index is not None else 0}"
+    args.crop_size = MODELS[args.model][1]
     return args
 
 
@@ -173,6 +175,7 @@ def run_benchmark(args, encoder, crop_size, out_dir):
             ))
         counters_after = compiler_snapshot() if args.compile else None
     return {"samples": rows, "instrumentation": instrumentation,
+            "input_sha256": hashlib.sha256(clip).hexdigest(),
             "compilation": {"enabled": args.compile,
                             "mode": "max-autotune" if args.compile else None,
                             "before_measured_iterations": counters_before,
@@ -206,6 +209,10 @@ def save_outputs(args, results, out_dir, environment, accuracy=None):
         "environment": environment,
         "metric": "raw pageable uint8 BTHWC to device embeddings using synchronized CUDA events",
         "preprocess": "official single view resize center crop tensor conversion normalization and pinning",
+        "input": {"layout": "BTHWC", "dtype": "uint8", "memory": "pageable CPU",
+                  "shape": [args.batch, args.frames, args.crop_size, args.crop_size, 3],
+                  "crop_size": args.crop_size, "short_side_resize": int(args.crop_size * 256 / 224),
+                  "sha256": results.get("input_sha256")},
         "stages": stages,
         "validity": validity,
         "instrumentation": results["instrumentation"],
