@@ -2587,3 +2587,11 @@ Compiler tracing counters before/after measurement expose late compilation,
 graph breaks, or a wrapper that captured no graph. Late tracing or no captured
 graph invalidates latency instead of silently accepting an eager fallback.
 Graph step markers and output release precede each new pipeline sample.
+
+## C5 operator attribution
+
+`--profile` captures a separate full raw-clip pipeline call after measured
+latency. It exports operator input shapes, CPU/CUDA totals, and a Chrome trace
+without modifying the primary sample loop. Its three real CPU profiler tests
+pass, checking numerical output, trace operators/shapes, and exception cleanup.
+CUDA attribution and the first target profile follow GPU test validation.

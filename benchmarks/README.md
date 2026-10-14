@@ -54,6 +54,13 @@ Each run creates a new output directory:
 | timings_per_iteration.csv | Raw end-to-end, wall, CPU preprocessing, transfer, encoder and GPU samples |
 | summary.json | Median, mean, p95, source hash, runtime versions, configuration and validity |
 | accuracy.json | Every pretrained clip checked against fp32, including repeat-input checks |
+| trace.json and top_ops.txt | Operator shapes, CPU/CUDA attribution when --profile is requested |
+| profile.json | Metadata identifying the separate untimed profiler pass |
+
+Add --profile to either comparator command to capture a separate full pipeline
+pass after latency measurement. Inspect device_time_total and the trace for
+GEMMs, attention, copies, preprocessing, and launch gaps before selecting an
+optimization. Profiling uses the same raw clip, dtype, and callable as timing.
 
 The compiled comparator wraps the untouched fp32-weight encoder with
 torch.compile(mode="max-autotune") and uses the same fp16 autocast and official

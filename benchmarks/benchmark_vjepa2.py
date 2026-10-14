@@ -45,6 +45,7 @@ def parse_args(argv=None):
     parser.add_argument("--warmup", type=int, default=20)
     parser.add_argument("--compile", action="store_true", help="compile the official encoder with max-autotune")
     parser.add_argument("--skip-accuracy", action="store_true", help="diagnostic run without pretrained quality validation")
+    parser.add_argument("--profile", action="store_true", help="export a separate untimed pipeline trace")
     weights = parser.add_mutually_exclusive_group()
     weights.add_argument("--pretrained", action="store_true", dest="pretrained")
     weights.add_argument("--random-weights", action="store_false", dest="pretrained")
@@ -255,6 +256,23 @@ def main():
     print(f"end_to_end_ms median={latency['median_ms']:.3f} mean={latency['mean_ms']:.3f} "
           f"p95={latency['p95_ms']:.3f} valid={summary['validity']['passed']}", flush=True)
     print(f"outputs: {out_dir}", flush=True)
+    if args.profile:
+        from benchmarks.profiling import profile_callable
+
+        preprocess = make_preprocess(crop_size)
+        clip = make_clip(args.batch, args.frames, crop_size, args.seed)
+
+        # Match the measured pipeline while keeping attribution outside all latency samples.
+        def profile_once():
+            if args.compile:
+                torch.compiler.cudagraph_mark_step_begin()
+            x = preprocess(clip).pin_memory().to(args.device, non_blocking=True)
+            with torch.autocast("cuda", dtype=DTYPES[args.dtype], enabled=args.dtype != "fp32"):
+                return candidate(x)
+
+        with torch.cuda.device(args.device), torch.inference_mode():
+            profiling = profile_callable(profile_once, out_dir)
+        (out_dir / "profile.json").write_text(json.dumps(profiling, indent=2) + "\n", encoding="utf-8")
     if not summary["validity"]["passed"]:
         raise SystemExit(2)
 
