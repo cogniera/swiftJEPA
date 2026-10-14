@@ -43,6 +43,8 @@ def parse_args(argv=None):
     parser.add_argument("--dtype", default="fp16", choices=DTYPES)
     parser.add_argument("--iters", type=int, default=200)
     parser.add_argument("--warmup", type=int, default=20)
+    parser.add_argument("--compile", action="store_true", help="compile the official encoder with max-autotune")
+    parser.add_argument("--skip-accuracy", action="store_true", help="diagnostic run without pretrained quality validation")
     weights = parser.add_mutually_exclusive_group()
     weights.add_argument("--pretrained", action="store_true", dest="pretrained")
     weights.add_argument("--random-weights", action="store_false", dest="pretrained")
@@ -58,6 +60,8 @@ def parse_args(argv=None):
         parser.error("--frames must be a positive multiple of tubelet size 2")
     if min(args.batch, args.iters, args.warmup, args.cpu_threads, args.opencv_threads) <= 0:
         parser.error("batch, iterations, warmup and thread counts must be positive")
+    if args.compile:
+        args.warmup = max(args.warmup, 20)
     return args
 
 
@@ -90,8 +94,10 @@ def make_events(stream):
 
 
 # Timestamp before CPU work, then corroborate the full elapsed interval with wall time.
-def measure_iteration(encoder, preprocess, clip, device, dtype, events, stream):
+def measure_iteration(encoder, preprocess, clip, device, dtype, events, stream, compiled=False):
     pipeline_start, gpu_start, after_h2d, end = events
+    if compiled:
+        torch.compiler.cudagraph_mark_step_begin()
     wall_start = time.perf_counter()
     pipeline_start.record(stream)
     pipeline_start.synchronize()
@@ -134,6 +140,13 @@ def measure_instrumentation(events, stream):
     return {key: summarize_samples([row[key] for row in samples]) for key in samples[0]}
 
 
+# Preserve tracing counters to detect compilation or silent eager fallback in measured runs.
+def compiler_snapshot():
+    from torch._dynamo.utils import counters
+
+    return {name: dict(counters[name]) for name in ("frames", "stats", "graph_break")}
+
+
 # Headline timing has no hooks or profiler; each sample includes official host preparation.
 def run_benchmark(args, encoder, crop_size, out_dir):
     device = torch.device(args.device)
@@ -147,16 +160,22 @@ def run_benchmark(args, encoder, crop_size, out_dir):
         events = make_events(stream)
         instrumentation = measure_instrumentation(events, stream)
         for _ in range(args.warmup):
-            measure_iteration(encoder, preprocess, clip, device, DTYPES[args.dtype], events, stream)
+            measure_iteration(encoder, preprocess, clip, device, DTYPES[args.dtype], events, stream, args.compile)
+        counters_before = compiler_snapshot() if args.compile else None
         for _ in range(args.iters):
             rows.append(measure_iteration(
-                encoder, preprocess, clip, device, DTYPES[args.dtype], events, stream
+                encoder, preprocess, clip, device, DTYPES[args.dtype], events, stream, args.compile
             ))
-    return {"samples": rows, "instrumentation": instrumentation}
+        counters_after = compiler_snapshot() if args.compile else None
+    return {"samples": rows, "instrumentation": instrumentation,
+            "compilation": {"enabled": args.compile,
+                            "mode": "max-autotune" if args.compile else None,
+                            "before_measured_iterations": counters_before,
+                            "after_measured_iterations": counters_after}}
 
 
 # Preserve per-iteration samples and enough metadata to reject incomparable or noisy runs.
-def save_outputs(args, results, out_dir, environment):
+def save_outputs(args, results, out_dir, environment, accuracy=None):
     rows = results["samples"]
     with (out_dir / "timings_per_iteration.csv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=["iteration", *rows[0]])
@@ -166,6 +185,16 @@ def save_outputs(args, results, out_dir, environment):
     stages = {key: summarize_samples([row[key] for row in rows]) for key in rows[0]}
     validity = run_validity([row["end_to_end_ms"] for row in rows],
                             source_dirty=environment["tracked_dirty"])
+    compilation = results.get("compilation", {"enabled": False})
+    if compilation["enabled"]:
+        before = compilation["before_measured_iterations"]
+        after = compilation["after_measured_iterations"]
+        if before != after:
+            validity["reasons"].append("compiler activity occurred during measured iterations")
+        if after["stats"].get("unique_graphs", 0) == 0:
+            validity["reasons"].append("compiled encoder captured no graphs")
+        validity["passed"] = not validity["reasons"]
+    accuracy = accuracy or {"passed": None, "reason": "not validated"}
     summary = {
         "schema_version": 2,
         "config": vars(args),
@@ -176,8 +205,9 @@ def save_outputs(args, results, out_dir, environment):
         "validity": validity,
         "instrumentation": results["instrumentation"],
         "throughput_clips_per_s": args.batch * 1000 / stages["end_to_end_ms"]["mean_ms"],
-        "accuracy": {"passed": None, "reason": "not validated"},
-        "acceptance_eligible": False,
+        "compilation": compilation,
+        "accuracy": accuracy,
+        "acceptance_eligible": validity["passed"] and args.pretrained and accuracy["passed"] is True,
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2, allow_nan=False) + "\n", encoding="utf-8")
     return summary
@@ -203,8 +233,24 @@ def main():
     environment = collect_environment(ROOT, args.device)
     print(f"building {args.model} pretrained={args.pretrained}", flush=True)
     encoder, crop_size = build_encoder(args)
-    results = run_benchmark(args, encoder, crop_size, out_dir)
-    summary = save_outputs(args, results, out_dir, environment)
+    candidate = torch.compile(encoder, mode="max-autotune") if args.compile else encoder
+    accuracy = None
+    if args.pretrained and not args.skip_accuracy:
+        from benchmarks.accuracy import validate_encoder
+
+        preprocess = make_preprocess(crop_size)
+        with torch.cuda.device(args.device):
+            accuracy = validate_encoder(
+                encoder, candidate, lambda clip: preprocess(clip).to(args.device),
+                args.device, DTYPES[args.dtype], args.frames, args.batch, crop_size,
+                seed=args.seed,
+            )
+        (out_dir / "accuracy.json").write_text(json.dumps(accuracy, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+        print(f"accuracy passed={accuracy['passed']} minimum_cosine={accuracy['minimum_cosine']}", flush=True)
+        if not accuracy["passed"]:
+            raise SystemExit("pretrained quality gate failed; see accuracy.json")
+    results = run_benchmark(args, candidate, crop_size, out_dir)
+    summary = save_outputs(args, results, out_dir, environment, accuracy)
     latency = summary["stages"]["end_to_end_ms"]
     print(f"end_to_end_ms median={latency['median_ms']:.3f} mean={latency['mean_ms']:.3f} "
           f"p95={latency['p95_ms']:.3f} valid={summary['validity']['passed']}", flush=True)

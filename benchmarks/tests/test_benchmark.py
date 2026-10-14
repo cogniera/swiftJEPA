@@ -10,12 +10,11 @@ import json
 from pathlib import Path
 import tempfile
 import time
-from types import SimpleNamespace
 import unittest
 
 import torch
 
-from benchmarks.benchmark_vjepa2 import make_events, measure_iteration, save_outputs
+from benchmarks.benchmark_vjepa2 import make_events, measure_iteration, parse_args, save_outputs
 
 
 # Persist enough data to reconstruct statistics and reject an unvalidated quality claim.
@@ -26,7 +25,7 @@ class OutputTests(unittest.TestCase):
                     "encoder_cuda_ms": 0.8, "gpu_total_ms": 1.0}
                    for value in [10.0] * 180 + [12.0] * 20]
         with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent) as directory:
-            summary = save_outputs(SimpleNamespace(batch=1),
+            summary = save_outputs(parse_args([]),
                                    {"samples": samples, "instrumentation": {}},
                                    Path(directory), {"tracked_dirty": False})
             saved = json.loads((Path(directory) / "summary.json").read_text())
@@ -39,6 +38,31 @@ class OutputTests(unittest.TestCase):
         self.assertTrue(saved["validity"]["passed"])
         self.assertFalse(saved["acceptance_eligible"])
         self.assertIsNone(saved["accuracy"]["passed"])
+
+    def test_compile_activity_and_eager_fallback_are_rejected(self):
+        samples = [{"end_to_end_ms": 10.0}] * 200
+        for before, after, expected in (
+            ({"stats": {"unique_graphs": 1}}, {"stats": {"unique_graphs": 2}}, "compiler activity"),
+            ({"stats": {}}, {"stats": {}}, "captured no graphs"),
+        ):
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent) as directory:
+                results = {"samples": samples, "instrumentation": {},
+                           "compilation": {"enabled": True,
+                                           "before_measured_iterations": before,
+                                           "after_measured_iterations": after}}
+                summary = save_outputs(parse_args(["--compile"]), results, Path(directory),
+                                       {"tracked_dirty": False}, {"passed": True})
+            self.assertFalse(summary["validity"]["passed"])
+            self.assertFalse(summary["acceptance_eligible"])
+            self.assertTrue(any(expected in reason for reason in summary["validity"]["reasons"]))
+
+    def test_quality_failure_cannot_be_an_accepted_latency_claim(self):
+        results = {"samples": [{"end_to_end_ms": 10.0}] * 200, "instrumentation": {}}
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent) as directory:
+            summary = save_outputs(parse_args([]), results, Path(directory),
+                                   {"tracked_dirty": False}, {"passed": False})
+        self.assertTrue(summary["validity"]["passed"])
+        self.assertFalse(summary["acceptance_eligible"])
 
 
 # Real CUDA events must include host work between the synchronized start and upload.

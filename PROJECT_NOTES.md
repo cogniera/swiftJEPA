@@ -2576,3 +2576,14 @@ driver/toolkit/torch versions, precision settings, and CPU/library details.
 The 15 reporting tests pass, including noisy tails, insufficient samples,
 unknown/dirty source, nonfinite data, and selecting a nondefault GPU. A run
 without pretrained quality validation cannot become acceptance eligible.
+
+## Compiled official comparator brought forward
+
+The official fp32-weight encoder is wrapped with `torch.compile(mode="max-autotune")`
+and called under the same fp16 autocast and official input pipeline as eager.
+Pretrained seven-clip fp32 validation runs before latency; failed quality saves
+its report and stops. At least 20 compile warmups precede the measured loop.
+Compiler tracing counters before/after measurement expose late compilation,
+graph breaks, or a wrapper that captured no graph. Late tracing or no captured
+graph invalidates latency instead of silently accepting an eager fallback.
+Graph step markers and output release precede each new pipeline sample.

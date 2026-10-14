@@ -20,6 +20,8 @@ Run from the Docker environment:
 ~~~bash
 docker compose run --rm dev python benchmarks/benchmark_vjepa2.py \
   --session-id baseline-session-1 --out benchmarks/results/official_eager_1
+docker compose run --rm dev python benchmarks/benchmark_vjepa2.py --compile \
+  --session-id baseline-session-1 --out benchmarks/results/official_compiled_1
 ~~~
 
 On a disposable Linux host, install the existing requirements in an isolated
@@ -51,6 +53,13 @@ Each run creates a new output directory:
 |---|---|
 | timings_per_iteration.csv | Raw end-to-end, wall, CPU preprocessing, transfer, encoder and GPU samples |
 | summary.json | Median, mean, p95, source hash, runtime versions, configuration and validity |
+| accuracy.json | Every pretrained clip checked against fp32, including repeat-input checks |
+
+The compiled comparator wraps the untouched fp32-weight encoder with
+torch.compile(mode="max-autotune") and uses the same fp16 autocast and official
+input pipeline. At least 20 warmups precede its measured loop. Compiler counters
+are saved before and after measurement; new tracing activity or no captured
+graphs invalidates the run. Preserve stderr diagnostics with retained artifacts.
 
 Use end_to_end_ms.median_ms under stages as the primary latency. GPU totals
 and encoder timing explain its components. A valid latency run needs at least
@@ -62,6 +71,11 @@ The deterministic quality suite covers noise, constant clips, moving gradients,
 checkerboards, and color bars. Each candidate output is checked per clip
 against untouched fp32 output with TF32 disabled, including repeated calls and
 changed input. The lossless gate is minimum cosine at least 0.999.
+
+Pretrained accuracy runs before latency. A failed gate saves accuracy.json and
+stops. --skip-accuracy is available for diagnostics and cannot establish target
+acceptance. Compilation, quality comparisons, and output snapshots are outside
+the latency interval.
 
 Only back-to-back A/B comparisons sharing the same session, input seed,
 preprocessing, weights, runtime, and workload support a speedup claim. Old
