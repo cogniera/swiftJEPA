@@ -2621,3 +2621,12 @@ The current checkpoint download is 4.78 GiB, superseding the historical size
 estimate. Host memory and disk have adequate headroom (392 GiB available RAM,
 89 GiB free workspace disk at inspection). GPU UUID is
 `abaa5fe0-76a5-6def-ee23-70d8993c1c66`; torch reports 50866487296 memory bytes.
+
+## C6 plots of measured pipeline intervals
+
+`--plot` renders the independent CPU, H2D, encoder, and primary end-to-end
+samples plus an end-to-end histogram. It derives percentile markers from raw
+samples, rejects stale summaries, and labels invalid timing runs. Five CPU
+tests pass, including malformed data, figure labels, and actual PNG export.
+Synthetic fixtures were visually checked; measured plots follow the first
+completed baseline. Plotting remains outside the timed A/B loops.

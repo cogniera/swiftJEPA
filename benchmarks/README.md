@@ -56,6 +56,13 @@ Each run creates a new output directory:
 | accuracy.json | Every pretrained clip checked against fp32, including repeat-input checks |
 | trace.json and top_ops.txt | Operator shapes, CPU/CUDA attribution when --profile is requested |
 | profile.json | Metadata identifying the separate untimed profiler pass |
+| latency.png | Independent timing heatmap and raw end-to-end distribution when --plot is requested |
+| run.json | Config and environment retained before model construction, including failed attempts |
+
+Add --plot to render independently measured intervals and the end-to-end
+distribution after timing. Median and p95 come from the raw end-to-end samples;
+component medians are not summed into a synthetic total. Rejected runs keep
+their validity label in the figure.
 
 Add --profile to either comparator command to capture a separate full pipeline
 pass after latency measurement. Inspect device_time_total and the trace for

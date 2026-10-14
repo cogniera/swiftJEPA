@@ -47,6 +47,7 @@ def parse_args(argv=None):
     parser.add_argument("--compile", action="store_true", help="compile the official encoder with max-autotune")
     parser.add_argument("--skip-accuracy", action="store_true", help="diagnostic run without pretrained quality validation")
     parser.add_argument("--profile", action="store_true", help="export a separate untimed pipeline trace")
+    parser.add_argument("--plot", action="store_true", help="plot independently measured pipeline intervals")
     weights = parser.add_mutually_exclusive_group()
     weights.add_argument("--pretrained", action="store_true", dest="pretrained")
     weights.add_argument("--random-weights", action="store_false", dest="pretrained")
@@ -269,6 +270,10 @@ def main():
     print(f"end_to_end_ms median={latency['median_ms']:.3f} mean={latency['mean_ms']:.3f} "
           f"p95={latency['p95_ms']:.3f} valid={summary['validity']['passed']}", flush=True)
     print(f"outputs: {out_dir}", flush=True)
+    if args.plot:
+        from benchmarks.plot_results import plot_run
+
+        plot_run(summary, out_dir / "timings_per_iteration.csv", out_dir / "latency.png")
     if args.profile:
         from benchmarks.profiling import profile_callable
 
