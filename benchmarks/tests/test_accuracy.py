@@ -11,7 +11,7 @@ import unittest
 import numpy as np
 import torch
 
-from benchmarks.accuracy import compare_embeddings, iter_test_clips, validate_encoder
+from benchmarks.accuracy import compare_embeddings, iter_test_clips, validate_encoder, validate_pipelines
 
 
 # Test metric failures independently of pretrained weights or CUDA availability.
@@ -153,6 +153,82 @@ class EncoderValidationTests(unittest.TestCase):
         self.assertTrue(result["passed"])
         self.assertEqual(len(result["clips"]), 7)
         self.assertAlmostEqual(result["minimum_cosine"], 1.0)
+
+
+# Exercise separate raw preprocessing paths and native precision without CUDA.
+class PipelineValidationTests(unittest.TestCase):
+    @staticmethod
+    def reference_pipeline(clip):
+        return EncoderValidationTests.encoder(EncoderValidationTests.preprocess(clip))
+
+    def test_native_pipeline_receives_raw_clips_without_ambient_autocast(self):
+        observed_autocast = []
+
+        def reference(clip):
+            observed_autocast.append(torch.is_autocast_enabled("cpu"))
+            return self.reference_pipeline(clip)
+
+        def candidate(clip):
+            self.assertIsInstance(clip, np.ndarray)
+            self.assertEqual(clip.dtype, np.uint8)
+            self.assertEqual(clip.shape, (1, 2, 8, 8, 3))
+            observed_autocast.append(torch.is_autocast_enabled("cpu"))
+            return self.reference_pipeline(clip).to(torch.bfloat16)
+
+        with torch.autocast("cpu", dtype=torch.bfloat16):
+            result = validate_pipelines(reference, candidate, "cpu", torch.bfloat16,
+                                        frames=2, crop_size=8, seed=17)
+        self.assertTrue(result["passed"])
+        self.assertEqual(len(result["clips"]), 7)
+        self.assertFalse(any(observed_autocast))
+        self.assertEqual(len(observed_autocast), 21)
+        self.assertEqual(result["candidate_dtype"], "bfloat16")
+        self.assertNotIn("candidate_autocast_dtype", result)
+        self.assertEqual(result["validation_scope"], "raw_uint8_to_embeddings")
+        self.assertEqual(result["clip_seed"], 17)
+        json.dumps(result, allow_nan=False)
+
+    def test_preprocessing_mismatch_fails_complete_pipeline_gate(self):
+        def candidate(clip):
+            return self.reference_pipeline(255 - clip)
+
+        result = validate_pipelines(self.reference_pipeline, candidate, "cpu", torch.float32,
+                                    frames=2, crop_size=8)
+        self.assertFalse(result["passed"])
+        black = next(row for row in result["clips"] if row["name"] == "black")
+        self.assertAlmostEqual(black["minimum_cosine"], 0.5)
+
+    def test_raw_pipeline_reference_snapshot_survives_shared_buffer(self):
+        buffer = torch.empty(1, 4)
+
+        def reference(clip):
+            buffer.copy_(self.reference_pipeline(clip))
+            return buffer
+
+        def candidate(clip):
+            buffer.copy_(-self.reference_pipeline(clip))
+            return buffer
+
+        result = validate_pipelines(reference, candidate, "cpu", torch.float32,
+                                    frames=2, crop_size=8)
+        self.assertFalse(result["passed"])
+        for row in result["clips"]:
+            self.assertAlmostEqual(row["minimum_cosine"], -1.0)
+
+    def test_raw_pipeline_repeated_input_corruption_is_detected(self):
+        call_count = 0
+
+        def candidate(clip):
+            nonlocal call_count
+            call_count += 1
+            output = self.reference_pipeline(clip)
+            return -output if call_count % 2 == 0 else output
+
+        result = validate_pipelines(self.reference_pipeline, candidate, "cpu", torch.float32,
+                                    frames=2, crop_size=8)
+        self.assertFalse(result["passed"])
+        self.assertTrue(all(row["passed"] for row in result["clips"]))
+        self.assertTrue(all(not row["repeat_input"]["passed"] for row in result["clips"]))
 
 
 # Run with unittest discovery so importing the module does not execute tests.

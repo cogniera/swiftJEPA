@@ -113,6 +113,26 @@ def _snapshot(output: torch.Tensor) -> torch.Tensor:
     return output.detach().to(device="cpu", dtype=torch.float32, copy=True)
 
 
+# Keep corpus and quality metadata identical for encoder and complete pipeline checks.
+def _validation_report(rows, dtype, frames, batch, crop_size, minimum_cosine, seed, precision_key):
+    valid_cosines = [metrics["minimum_cosine"] for row in rows
+                     for metrics in (row, row["repeat_input"]) if metrics["minimum_cosine"] is not None]
+    return {
+        "passed": all(row["passed"] and row["repeat_input"]["passed"] for row in rows),
+        "minimum_cosine": min(valid_cosines) if valid_cosines else None,
+        "minimum_cosine_required": minimum_cosine,
+        "reference_dtype": "float32",
+        precision_key: str(dtype).removeprefix("torch."),
+        "clip_layout": "BTHWC uint8",
+        "frames": frames,
+        "batch": batch,
+        "crop_size": crop_size,
+        "clip_seed": seed,
+        "clip_suite_version": 2,
+        "clips": rows,
+    }
+
+
 # Check repeated inputs and changed clips against the same untouched fp32 encoder.
 def validate_encoder(
     reference_encoder: Callable[[torch.Tensor], torch.Tensor],
@@ -157,19 +177,42 @@ def validate_encoder(
                 del candidate
             rows.append({"name": name, **measurements[0], "repeat_input": measurements[1]})
             del clip, encoder_input, reference, measurements
-    valid_cosines = [metrics["minimum_cosine"] for row in rows
-                     for metrics in (row, row["repeat_input"]) if metrics["minimum_cosine"] is not None]
-    return {
-        "passed": all(row["passed"] and row["repeat_input"]["passed"] for row in rows),
-        "minimum_cosine": min(valid_cosines) if valid_cosines else None,
-        "minimum_cosine_required": minimum_cosine,
-        "reference_dtype": "float32",
-        "candidate_autocast_dtype": str(dtype).removeprefix("torch."),
-        "clip_layout": "BTHWC uint8",
-        "frames": frames,
-        "batch": batch,
-        "crop_size": crop_size,
-        "clip_seed": seed,
-        "clip_suite_version": 2,
-        "clips": rows,
-    }
+    return _validation_report(rows, dtype, frames, batch, crop_size, minimum_cosine, seed,
+                              "candidate_autocast_dtype")
+
+
+# Validate independent preprocessing and native encoder execution from the same raw clips.
+def validate_pipelines(
+    reference_pipeline: Callable[[np.ndarray], torch.Tensor],
+    candidate_pipeline: Callable[[np.ndarray], torch.Tensor],
+    device: str | torch.device,
+    dtype: torch.dtype,
+    frames: int = 16,
+    batch: int = 1,
+    crop_size: int = 256,
+    minimum_cosine: float = 0.999,
+    seed: int = 0,
+) -> dict:
+    """Compare raw uint8 to embeddings; callbacks own preprocessing and precision."""
+    device = torch.device(device)
+    if dtype not in (torch.float32, torch.float16, torch.bfloat16):
+        raise ValueError("dtype must be float32, float16 or bfloat16")
+    compiler = getattr(torch, "compiler", None)
+    mark_step = getattr(compiler, "cudagraph_mark_step_begin", None)
+    rows = []
+    with torch.inference_mode():
+        for name, clip in iter_test_clips(frames, batch, crop_size, seed):
+            with torch.autocast(device_type=device.type, enabled=False):
+                reference = _snapshot(reference_pipeline(clip))
+            measurements = []
+            for _ in range(2):
+                if mark_step is not None and device.type == "cuda":
+                    mark_step()
+                with torch.autocast(device_type=device.type, enabled=False):
+                    candidate = _snapshot(candidate_pipeline(clip))
+                measurements.append(compare_embeddings(reference, candidate, minimum_cosine))
+                del candidate
+            rows.append({"name": name, **measurements[0], "repeat_input": measurements[1]})
+            del clip, reference, measurements
+    return {**_validation_report(rows, dtype, frames, batch, crop_size, minimum_cosine, seed,
+                                 "candidate_dtype"), "validation_scope": "raw_uint8_to_embeddings"}

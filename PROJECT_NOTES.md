@@ -2667,3 +2667,13 @@ The focused control-flow regression covers both official modes, preservation of
 failed per-clip metrics, and saved latency samples. Engine quality gates remain
 mandatory before any engine benchmark. This supersedes the earlier C4 note
 that all failed official quality runs stop before timing.
+
+## Complete pipeline quality validation
+
+Added `validate_pipelines` for independent raw uint8 preprocessing and native
+encoder execution. It compares both complete paths against the same raw clips
+with ambient autocast disabled, snapshots reused output buffers, and applies
+the unchanged seven-clip/repeated-call gate. This prevents future GPU resize or
+normalization changes from bypassing accuracy checks by sharing preprocessed
+input. Existing encoder validation remains compatible. All 15 CPU accuracy
+tests pass, including mismatched preprocessing and reused-buffer failures.
