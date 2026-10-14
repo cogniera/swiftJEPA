@@ -3,317 +3,214 @@
 #Project Name : swiftJEPA
 #Creation Date : 16th September 2026
 #Modification Date : 14th October 2026
-#Description : Baseline latency harness for the official V-JEPA 2 encoder.
+#Description : Measure raw video to embeddings with the official input pipeline.
 
 import argparse
 import csv
+from datetime import datetime, timezone
 import json
+from pathlib import Path
 import sys
 import time
-from datetime import datetime
-from pathlib import Path
+import uuid
 
 import numpy as np
 import torch
 
-HERE = Path(__file__).resolve().parent
-ROOT = HERE.parent
-VJEPA2_REPO = ROOT / "vjepa2"
+# Resolve the project and upstream packages before importing project helpers.
+ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(VJEPA2_REPO))
-
+sys.path.insert(0, str(ROOT / "vjepa2"))
 from benchmarks.pipeline import make_preprocess
+from benchmarks.reporting import collect_environment, run_validity, summarize_samples
 
 PUBLIC_CKPT_URL = "https://dl.fbaipublicfiles.com/vjepa2"
-
-# Map benchmark names to the official encoder builders and crop sizes.
 MODELS = {
     "vitl": ("vjepa2_vit_large", 256),
     "vith": ("vjepa2_vit_huge", 256),
     "vitg": ("vjepa2_vit_giant", 256),
     "vitg-384": ("vjepa2_vit_giant_384", 384),
 }
-
 DTYPES = {"fp32": torch.float32, "fp16": torch.float16, "bf16": torch.bfloat16}
 
 
-def parse_args():
-    if torch.cuda.is_available():
-        default_device = "cuda"
-    else:
-        default_device = "cpu"
+# Pretrained runs are the default; random weights are explicit diagnostic input.
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description="Raw uint8 to V-JEPA 2 embeddings")
+    parser.add_argument("--model", default="vitl", choices=MODELS)
+    parser.add_argument("--frames", type=int, default=16)
+    parser.add_argument("--batch", type=int, default=1)
+    parser.add_argument("--dtype", default="fp16", choices=DTYPES)
+    parser.add_argument("--iters", type=int, default=200)
+    parser.add_argument("--warmup", type=int, default=20)
+    weights = parser.add_mutually_exclusive_group()
+    weights.add_argument("--pretrained", action="store_true", dest="pretrained")
+    weights.add_argument("--random-weights", action="store_false", dest="pretrained")
+    parser.set_defaults(pretrained=True)
+    parser.add_argument("--device", default="cuda")
+    parser.add_argument("--cpu-threads", type=int, default=4)
+    parser.add_argument("--opencv-threads", type=int, default=1)
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--session-id", default=None, help="shared ID for back-to-back A/B runs")
+    parser.add_argument("--out", default=None)
+    args = parser.parse_args(argv)
+    if args.frames <= 0 or args.frames % 2:
+        parser.error("--frames must be a positive multiple of tubelet size 2")
+    if min(args.batch, args.iters, args.warmup, args.cpu_threads, args.opencv_threads) <= 0:
+        parser.error("batch, iterations, warmup and thread counts must be positive")
+    return args
 
-    p = argparse.ArgumentParser(description="V-JEPA 2 inference benchmark")
-    p.add_argument("--model", default="vitl", choices=MODELS.keys())
-    p.add_argument("--frames", type=int, default=16, help="video frames (multiple of tubelet size 2)")
-    p.add_argument("--batch", type=int, default=1)
-    p.add_argument("--dtype", default="fp16", choices=DTYPES.keys())
-    p.add_argument("--iters", type=int, default=30)
-    p.add_argument("--warmup", type=int, default=5)
-    p.add_argument("--pretrained", action="store_true", help="download real weights")
-    p.add_argument("--device", default=default_device)
-    p.add_argument("--out", default=None)
-    return p.parse_args()
 
-
+# Keep the encoder architecture, fp32 weights, SDPA, and forward implementation untouched.
 def build_encoder(args):
-    # Import upstream only after its vendored root is on the module search path.
     import src.hub.backbones as backbones
 
     backbones.VJEPA_BASE_URL = PUBLIC_CKPT_URL
-
-    builder_name, img_size = MODELS[args.model]
-    builder = getattr(backbones, builder_name)
-
-    encoder, predictor = builder(pretrained=args.pretrained, num_frames=args.frames)
+    builder_name, crop_size = MODELS[args.model]
+    encoder, predictor = getattr(backbones, builder_name)(
+        pretrained=args.pretrained, num_frames=args.frames
+    )
     del predictor
-
-    encoder.eval()
-    encoder.to(args.device)
-
-    return encoder, img_size
+    return encoder.eval().to(args.device), crop_size
 
 
-class LayerTimer:
-
-    def __init__(self, encoder, device):
-        self.device = device
-
-        self.stages = []
-        self.stages.append(("patch_embed", encoder.patch_embed))
-
-        for i in range(len(encoder.blocks)):
-            name = f"block_{i:02d}"
-            self.stages.append((name, encoder.blocks[i]))
-
-        self.stages.append(("norm", encoder.norm))
-
-        self.records = []
-        self._current = None
-        self._handles = []
-
-        for name, mod in self.stages:
-            pre_handle = mod.register_forward_pre_hook(self.pre(name))
-            post_handle = mod.register_forward_hook(self.post(name))
-            self._handles.append(pre_handle)
-            self._handles.append(post_handle)
-
-    def pre(self, name):
-        # pytorch only calls a hook with the module and its input, so this makes a new hook that already knows its own stage name.
-        def hook(_mod, _inp):
-            evt = torch.cuda.Event(enable_timing=True)
-            evt.record()
-            self._current[name] = [evt, None]
-        return hook
-
-    def post(self, name):
-        def hook(_mod, _inp, _out):
-            evt = torch.cuda.Event(enable_timing=True)
-            evt.record()
-            self._current[name][1] = evt
-        return hook
-
-    def start_iter(self):
-        self._current = {}
-
-    def end_iter(self):
-        self.records.append(self._current)
-        self._current = None
-
-    def elapsed_ms(self):
-        out = []
-        for rec in self.records:
-            one_iter = {}
-            for name in rec:
-                start_evt, end_evt = rec[name]
-                one_iter[name] = start_evt.elapsed_time(end_evt)
-            out.append(one_iter)
-        return out
-
-    def remove(self):
-        for handle in self._handles:
-            handle.remove()
+# Clip generation represents already decoded frames and stays outside inference timing.
+def make_clip(batch, frames, img_size, seed=0):
+    rng = np.random.default_rng(seed)
+    return rng.integers(0, 256, (batch, frames, img_size, img_size, 3), dtype=np.uint8)
 
 
-def make_clip(batch, frames, img_size):
-    # this makes fake random video frames so we can time the model without needing real video.
-    rng = np.random.default_rng(0)
-    shape = (batch, frames, img_size, img_size, 3)
-    return rng.integers(0, 256, size=shape, dtype=np.uint8)
+# Reuse initialized events so CUDA allocation and lazy initialization stay out of samples.
+def make_events(stream):
+    events = [torch.cuda.Event(enable_timing=True) for _ in range(4)]
+    for event in events:
+        event.record(stream)
+    events[-1].synchronize()
+    return events
 
 
-def run_benchmark(args, encoder, img_size, out_dir):
+# Timestamp before CPU work, then corroborate the full elapsed interval with wall time.
+def measure_iteration(encoder, preprocess, clip, device, dtype, events, stream):
+    pipeline_start, gpu_start, after_h2d, end = events
+    wall_start = time.perf_counter()
+    pipeline_start.record(stream)
+    pipeline_start.synchronize()
+    preprocess_start = time.perf_counter()
+    x_cpu = preprocess(clip).pin_memory()
+    preprocess_ms = (time.perf_counter() - preprocess_start) * 1000
+    gpu_start.record(stream)
+    x = x_cpu.to(device, non_blocking=True)
+    after_h2d.record(stream)
+    with torch.autocast("cuda", dtype=dtype, enabled=dtype != torch.float32):
+        output = encoder(x)
+    end.record(stream)
+    end.synchronize()
+    wall_ms = (time.perf_counter() - wall_start) * 1000
+    row = {
+        "end_to_end_ms": pipeline_start.elapsed_time(end),
+        "wall_ms": wall_ms,
+        "preprocess_cpu_ms": preprocess_ms,
+        "h2d_copy_ms": gpu_start.elapsed_time(after_h2d),
+        "encoder_cuda_ms": after_h2d.elapsed_time(end),
+        "gpu_total_ms": gpu_start.elapsed_time(end),
+    }
+    del output, x, x_cpu
+    return row
+
+
+# Measure the empty event window for disclosure, without subtracting it from latency.
+def measure_instrumentation(events, stream):
+    start, _, _, end = events
+    samples = []
+    for _ in range(10):
+        wall_start = time.perf_counter()
+        start.record(stream)
+        start.synchronize()
+        for event in events[1:]:
+            event.record(stream)
+        end.synchronize()
+        samples.append({"cuda_ms": start.elapsed_time(end),
+                        "wall_ms": (time.perf_counter() - wall_start) * 1000})
+    return {key: summarize_samples([row[key] for row in samples]) for key in samples[0]}
+
+
+# Headline timing has no hooks or profiler; each sample includes official host preparation.
+def run_benchmark(args, encoder, crop_size, out_dir):
     device = torch.device(args.device)
-    dtype = DTYPES[args.dtype]
-
-    # this timer only works on a gpu because it uses cuda events to measure time.
-    if device.type != "cuda":
-        sys.exit("CPU path not wired for CUDA-event timing, run on a CUDA device")
-
-    timer = LayerTimer(encoder, device)
-    clip = make_clip(args.batch, args.frames, img_size)
-    # Use the upstream resize, center crop, tensor conversion, and normalization.
-    preprocess = make_preprocess(img_size)
-
-    pre_ms = []
-    h2d_ms = []
-    total_ms = []
-
-    n_total = args.warmup + args.iters
-    # autocast only needs to run when we are not already using full precision.
-    autocast_on = dtype != torch.float32
-
-    with torch.inference_mode():
-        for i in range(n_total):
-            t0 = time.perf_counter()
-            x_cpu = preprocess(clip)
-            x_cpu = x_cpu.pin_memory()
-            t1 = time.perf_counter()
-
-            start = torch.cuda.Event(enable_timing=True)
-            after_h2d = torch.cuda.Event(enable_timing=True)
-            end = torch.cuda.Event(enable_timing=True)
-
-            timer.start_iter()
-            start.record()
-            x = x_cpu.to(device, non_blocking=True)
-            after_h2d.record()
-
-            with torch.autocast(device_type="cuda", dtype=dtype, enabled=autocast_on):
-                _ = encoder(x)
-
-            end.record()
-            # the gpu runs in the background so we wait here until it actually finishes.
-            torch.cuda.synchronize()
-            timer.end_iter()
-
-            # the first few iterations are just warmup and get thrown away.
-            if i >= args.warmup:
-                pre_ms.append((t1 - t0) * 1000)
-                h2d_ms.append(start.elapsed_time(after_h2d))
-                total_ms.append(start.elapsed_time(end))
-            else:
-                timer.records.clear()
-
-    layer_ms = timer.elapsed_ms()
-    timer.remove()
-
-    results = {
-        "preprocess_ms": pre_ms,
-        "h2d_copy_ms": h2d_ms,
-        "gpu_total_ms": total_ms,
-        "layers": layer_ms,
-    }
-    return results
-
-
-def save_outputs(args, results, out_dir):
-    layers = results["layers"]
-
-    # every iteration times the same stages so we just read the names from the first one.
-    stage_names = []
-    if len(layers) > 0 and len(layers[0]) > 0:
-        for name in layers[0]:
-            stage_names.append(name)
-
+    if device.type != "cuda" or not torch.cuda.is_available():
+        raise ValueError("benchmark timing requires an available CUDA device")
+    preprocess = make_preprocess(crop_size)
+    clip = make_clip(args.batch, args.frames, crop_size, args.seed)
     rows = []
-    for name in stage_names:
-        row = []
-        for one_iter in layers:
-            row.append(one_iter[name])
-        rows.append(row)
-    mat = np.array(rows)
+    with torch.cuda.device(device), torch.inference_mode():
+        stream = torch.cuda.current_stream(device)
+        events = make_events(stream)
+        instrumentation = measure_instrumentation(events, stream)
+        for _ in range(args.warmup):
+            measure_iteration(encoder, preprocess, clip, device, DTYPES[args.dtype], events, stream)
+        for _ in range(args.iters):
+            rows.append(measure_iteration(
+                encoder, preprocess, clip, device, DTYPES[args.dtype], events, stream
+            ))
+    return {"samples": rows, "instrumentation": instrumentation}
 
-    with open(out_dir / "timings_per_layer.csv", "w", newline="") as f:
-        w = csv.writer(f)
 
-        header = ["stage"]
-        for i in range(mat.shape[1]):
-            header.append("iter_" + str(i))
-        header.append("mean_ms")
-        header.append("p50_ms")
-        header.append("p95_ms")
-        w.writerow(header)
-
-        for name, row in zip(stage_names, mat):
-            line = [name]
-            for v in row:
-                line.append(f"{v:.4f}")
-            line.append(f"{row.mean():.4f}")
-            # p50 and p95 are the median time and the slowest-case time out of the iterations.
-            line.append(f"{np.percentile(row, 50):.4f}")
-            line.append(f"{np.percentile(row, 95):.4f}")
-            w.writerow(line)
-
-    stage_mean_ms = {}
-    for name, row in zip(stage_names, mat):
-        stage_mean_ms[name] = float(row.mean())
-
+# Preserve per-iteration samples and enough metadata to reject incomparable or noisy runs.
+def save_outputs(args, results, out_dir, environment):
+    rows = results["samples"]
+    with (out_dir / "timings_per_iteration.csv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["iteration", *rows[0]])
+        writer.writeheader()
+        for iteration, row in enumerate(rows):
+            writer.writerow({"iteration": iteration, **row})
+    stages = {key: summarize_samples([row[key] for row in rows]) for key in rows[0]}
+    validity = run_validity([row["end_to_end_ms"] for row in rows],
+                            source_dirty=environment["tracked_dirty"])
     summary = {
-        # vars turns the parsed command line args into a plain dict so it can be saved as json.
+        "schema_version": 2,
         "config": vars(args),
-        "preprocess_ms_mean": float(np.mean(results["preprocess_ms"])),
-        "h2d_copy_ms_mean": float(np.mean(results["h2d_copy_ms"])),
-        "gpu_total_ms_mean": float(np.mean(results["gpu_total_ms"])),
-        "gpu_total_ms_p95": float(np.percentile(results["gpu_total_ms"], 95)),
-        "throughput_clips_per_s": float(1000.0 / np.mean(results["gpu_total_ms"]) * args.batch),
-        "stage_mean_ms": stage_mean_ms,
+        "environment": environment,
+        "metric": "raw pageable uint8 BTHWC to device embeddings using synchronized CUDA events",
+        "preprocess": "official single view resize center crop tensor conversion normalization and pinning",
+        "stages": stages,
+        "validity": validity,
+        "instrumentation": results["instrumentation"],
+        "throughput_clips_per_s": args.batch * 1000 / stages["end_to_end_ms"]["mean_ms"],
+        "accuracy": {"passed": None, "reason": "not validated"},
+        "acceptance_eligible": False,
     }
-
-    with open(out_dir / "summary.json", "w") as f:
-        json.dump(summary, f, indent=2)
-
+    (out_dir / "summary.json").write_text(json.dumps(summary, indent=2, allow_nan=False) + "\n", encoding="utf-8")
     return summary
 
 
-def stage_time(item):
-    return item[1]
-
-
+# Make thread and precision settings explicit and identical across comparator runs.
 def main():
     args = parse_args()
+    if not torch.cuda.is_available() or torch.device(args.device).type != "cuda":
+        raise SystemExit("CUDA is required for benchmark timing")
+    import cv2
 
-    # this timestamp makes sure every run gets its own new folder instead of overwriting the last one.
-    tag = f"{args.model}_{args.frames}f_b{args.batch}_{args.dtype}_{datetime.now():%Y%m%d_%H%M%S}"
-
-    if args.out:
-        out_dir = Path(args.out)
-    else:
-        out_dir = HERE / "results" / tag
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    print(f"device: {args.device}", flush=True)
-    if args.device.startswith("cuda"):
-        print(f"gpu: {torch.cuda.get_device_name(0)}")
-    print(f"building {args.model} (pretrained={args.pretrained})", flush=True)
-
-    encoder, img_size = build_encoder(args)
-
-    n_params = 0
-    for p in encoder.parameters():
-        n_params += p.numel()
-    print(f"encoder params: {n_params/1e6:.1f}M, input {args.frames}x{img_size}x{img_size}")
-
-    results = run_benchmark(args, encoder, img_size, out_dir)
-    summary = save_outputs(args, results, out_dir)
-
-    print(f"\ngpu_total_ms mean={summary['gpu_total_ms_mean']:.2f} "
-          f"p95={summary['gpu_total_ms_p95']:.2f} "
-          f"throughput={summary['throughput_clips_per_s']:.2f} clips/s")
-
-    # this sorts the stages slowest first so we only print the top five.
-    stage_items = list(summary["stage_mean_ms"].items())
-    stage_items.sort(key=stage_time, reverse=True)
-    slowest = stage_items[:5]
-
-    slowest_text = ""
-    for name, ms in slowest:
-        if slowest_text != "":
-            slowest_text += ", "
-        slowest_text += f"{name}={ms:.2f}ms"
-    print("slowest stages:", slowest_text)
-
-    print(f"\noutputs | {out_dir}")
+    torch.cuda.set_device(args.device)
+    torch.set_num_threads(args.cpu_threads)
+    cv2.setNumThreads(args.opencv_threads)
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
+    torch.manual_seed(args.seed)
+    args.session_id = args.session_id or uuid.uuid4().hex
+    tag = f"{args.model}_{args.frames}f_b{args.batch}_{args.dtype}_{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}"
+    out_dir = Path(args.out) if args.out else ROOT / "benchmarks" / "results" / tag
+    out_dir.mkdir(parents=True, exist_ok=False)
+    environment = collect_environment(ROOT, args.device)
+    print(f"building {args.model} pretrained={args.pretrained}", flush=True)
+    encoder, crop_size = build_encoder(args)
+    results = run_benchmark(args, encoder, crop_size, out_dir)
+    summary = save_outputs(args, results, out_dir, environment)
+    latency = summary["stages"]["end_to_end_ms"]
+    print(f"end_to_end_ms median={latency['median_ms']:.3f} mean={latency['mean_ms']:.3f} "
+          f"p95={latency['p95_ms']:.3f} valid={summary['validity']['passed']}", flush=True)
+    print(f"outputs: {out_dir}", flush=True)
+    if not summary["validity"]["passed"]:
+        raise SystemExit(2)
 
 
 if __name__ == "__main__":

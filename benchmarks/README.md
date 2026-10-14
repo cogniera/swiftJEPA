@@ -1,36 +1,72 @@
-# V-JEPA 2 Inference Benchmark
+#Author : Paarth Sharma
+#File Name : README.md
+#Project Name : swiftJEPA
+#Creation Date : 16th September 2026
+#Modification Date : 14th October 2026
+#Description : Benchmark input contract measurement protocol and result interpretation.
 
-Times the official PyTorch V-JEPA 2 encoder end-to-end
+# V-JEPA 2 inference benchmarks
 
-## Setup
+The workload starts with a pageable NumPy uint8 clip in BTHWC layout and ends
+with device embeddings. Defaults are pretrained ViT-L, 16 frames, a 256px
+encoder crop, batch 1, fp16 autocast, 200 measured iterations, and 20 warmups.
 
-- `.venv/` - Python 3.12, PyTorch 2.13 + CUDA 12.6, timm, einops, numpy, etc.
-- `vjepa2/` - official repo clone. Note: its `src/hub/backbones.py` at HEAD
-  points `VJEPA_BASE_URL` at `localhost:8300`. The benchmark script overrides
-  it to the public `https://dl.fbaipublicfiles.com/vjepa2` automatically.
+The upstream single-view evaluation pipeline resizes the short side to 292,
+center crops to 256, converts the clip, and applies ImageNet normalization.
+Host preprocessing, pinning, transfer, and encoder execution are timed.
 
-## Run it
+Run from the Docker environment:
 
-```powershell
-.venv\Scripts\activate
-python benchmarks\benchmark_vjepa2.py                       
-python benchmarks\benchmark_vjepa2.py --frames 32 --iters 50
-python benchmarks\benchmark_vjepa2.py --dtype fp32          
-python benchmarks\benchmark_vjepa2.py --pretrained          
-```
+~~~bash
+docker compose run --rm dev python benchmarks/benchmark_vjepa2.py \
+  --session-id baseline-session-1 --out benchmarks/results/official_eager_1
+~~~
 
-Key flags: `--model {vitl,vith,vitg,vitg-384}`, `--frames N`, `--batch N`, `--dtype {fp32,fp16,bf16}`, `--iters`, `--warmup`.
+On a disposable Linux host, install the existing requirements in an isolated
+venv and use its Python interpreter. Set TORCH_HOME to an ignored checkpoint
+cache. Pull source changes from GitHub before running them.
 
-**6 GB VRAM guidance (RTX 4050):** `vitl` at 16–32 frames fp16 is comfortable.
-`vith`/`vitg` in fp16 may fit at 16 frames but will be tight and fp32 giant will
-run out of memory .
+CPU-only helper tests use the same package versions, with a CPU torch build:
 
-Weights are irrelevant to latency, so the default is random init.
-Use `--pretrained` only if you also want to sanity-check outputs.
+~~~bash
+python -m unittest discover -s benchmarks/tests -v
+~~~
 
-## Outputs 
+The CUDA timing test verifies that a deliberate CPU preprocessing delay
+appears in the CUDA-event end-to-end interval; it is skipped on CPU hosts.
+
+The synchronized start event executes before host preprocessing. CUDA-event
+elapsed time therefore includes the GPU idle interval while the CPU prepares
+the clip. Synchronized wall time corroborates that metric. Event objects are
+initialized and reused; the measured empty-window overhead is recorded and
+kept in the reported timing. Attribution belongs in a separate profiling pass.
+
+The default CPU settings are four torch intra-op threads and one OpenCV thread.
+Keep these settings identical across comparisons and retain them in metadata.
+Treat them as configurable runtime settings, not a claim of optimal CPU tuning.
+
+Each run creates a new output directory:
 
 | File | Contents |
 |---|---|
-| `timings_per_layer.csv` | ms per stage per iteration, metrics are mean/p50/p95 |
-| `summary.json` | config, totals, throughput, per-stage means |
+| timings_per_iteration.csv | Raw end-to-end, wall, CPU preprocessing, transfer, encoder and GPU samples |
+| summary.json | Median, mean, p95, source hash, runtime versions, configuration and validity |
+
+Use end_to_end_ms.median_ms under stages as the primary latency. GPU totals
+and encoder timing explain its components. A valid latency run needs at least
+200 samples, known-clean tracked source, and end-to-end p95/mean at most 1.3.
+Invalid runs retain their artifacts and exit with status 2. Quality must also
+pass before a run becomes eligible for a target claim.
+
+The deterministic quality suite covers noise, constant clips, moving gradients,
+checkerboards, and color bars. Each candidate output is checked per clip
+against untouched fp32 output with TF32 disabled, including repeated calls and
+changed input. The lossless gate is minimum cosine at least 0.999.
+
+Only back-to-back A/B comparisons sharing the same session, input seed,
+preprocessing, weights, runtime, and workload support a speedup claim. Old
+reference results are historical context. Random weights (--random-weights)
+and short runs are useful diagnostics and cannot establish target acceptance.
+
+Results are ignored by default. Add only reviewed run artifacts explicitly;
+checkpoints, result archives, and kernels_for_reuse are never committed.

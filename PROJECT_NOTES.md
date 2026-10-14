@@ -2559,3 +2559,20 @@ inputs; constant colors also independently check normalization. The benchmark
 CLI help now runs from the repo without needing an external `PYTHONPATH`.
 Latency reported by the earlier C4 format still excludes CPU work; the next
 commit replaces that format and removes hooks from headline timing.
+
+## C4 raw input timing and run validity
+
+Headline runs now have no forward hooks. Reused CUDA events bracket host
+preprocessing, pinning, H2D, and encoder execution; synchronized wall timing
+and individual pipeline segments accompany each raw sample. Empty-window
+instrumentation is disclosed without subtracting it. The CUDA regression test
+inserts a 20ms CPU delay to verify inclusion, and is pending the remote GPU.
+
+Default pretrained workloads use 200 samples and 20 warmups. Runtime thread
+settings (torch 4, OpenCV 1) are explicit and shared by all comparison paths;
+they are configurable, not an assertion of optimal tuning. Saved schema 2
+results include raw samples, median/mean/p95, full commit hash, selected GPU,
+driver/toolkit/torch versions, precision settings, and CPU/library details.
+The 15 reporting tests pass, including noisy tails, insufficient samples,
+unknown/dirty source, nonfinite data, and selecting a nondefault GPU. A run
+without pretrained quality validation cannot become acceptance eligible.
