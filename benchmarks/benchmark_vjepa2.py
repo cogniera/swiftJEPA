@@ -1,9 +1,9 @@
-# Author : Paarth Sharma
-# File Name : benchmark_vjepa2.py
-# Project Name : swiftJEPA
-# Creation Date : 16th September 2026
-# Modification Date : 16th September 2026
-# Description : Baseline latency harness for the official V-JEPA 2 encoder.
+#Author : Paarth Sharma
+#File Name : benchmark_vjepa2.py
+#Project Name : swiftJEPA
+#Creation Date : 16th September 2026
+#Modification Date : 14th October 2026
+#Description : Baseline latency harness for the official V-JEPA 2 encoder.
 
 import argparse
 import csv
@@ -15,7 +15,6 @@ from pathlib import Path
 
 import numpy as np
 import torch
-import src.hub.backbones as backbones
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -24,6 +23,7 @@ sys.path.insert(0, str(VJEPA2_REPO))
 
 PUBLIC_CKPT_URL = "https://dl.fbaipublicfiles.com/vjepa2"
 
+# Map benchmark names to the official encoder builders and crop sizes.
 MODELS = {
     "vitl": ("vjepa2_vit_large", 256),
     "vith": ("vjepa2_vit_huge", 256),
@@ -54,6 +54,9 @@ def parse_args():
 
 
 def build_encoder(args):
+    # Import upstream only after its vendored root is on the module search path.
+    import src.hub.backbones as backbones
+
     backbones.VJEPA_BASE_URL = PUBLIC_CKPT_URL
 
     builder_name, img_size = MODELS[args.model]
