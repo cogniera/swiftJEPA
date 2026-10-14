@@ -1,0 +1,78 @@
+{
+  "config": {
+    "model": "vitl",
+    "frames": 16,
+    "batch": 1,
+    "dtype": "fp16",
+    "iters": 200,
+    "warmup": 20,
+    "compile": false,
+    "skip_accuracy": false,
+    "profile": true,
+    "pretrained": true,
+    "device": "cuda:0",
+    "cpu_threads": 4,
+    "opencv_threads": 1,
+    "seed": 0,
+    "session_id": "c4_c5_20261014_02",
+    "out": "benchmarks/results/c4_c5_20261014_02/eager_1"
+  },
+  "environment": {
+    "commit": "ca6d01a623603fcd994d26b5b0c8c5baf96a2786",
+    "tracked_dirty": false,
+    "git": {
+      "revision": {
+        "available": true,
+        "output": "ca6d01a623603fcd994d26b5b0c8c5baf96a2786"
+      },
+      "tracked_status": {
+        "available": true,
+        "output": ""
+      }
+    },
+    "python": "3.12.3 (main, Mar  3 2026, 12:15:18) [GCC 13.3.0]",
+    "device": "cuda:0",
+    "packages": {
+      "torch": "2.14.0+cu126",
+      "torchvision": "0.29.0+cu126",
+      "timm": "1.0.29",
+      "numpy": "2.5.2",
+      "einops": "0.8.2",
+      "opencv": "5.0.0.93"
+    },
+    "nvidia_smi": {
+      "available": true,
+      "output": "Wed Oct 14 08:37:41 2026       \n+-----------------------------------------------------------------------------------------+\n| NVIDIA-SMI 595.71.05              Driver Version: 595.71.05      CUDA Version: 13.2     |\n+-----------------------------------------+------------------------+----------------------+\n| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |\n| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |\n|                                         |                        |               MIG M. |\n|=========================================+========================+======================|\n|   0  NVIDIA GeForce RTX 4090        On  |   00000000:A1:00.0 Off |                  Off |\n| 48%   37C    P0             63W /  450W |     409MiB /  49140MiB |      0%      Default |\n|                                         |                        |                  N/A |\n+-----------------------------------------+------------------------+----------------------+\n\n+-----------------------------------------------------------------------------------------+\n| Processes:                                                                              |\n|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |\n|        ID   ID                                                               Usage      |\n|=========================================================================================|\n|    0   N/A  N/A            1800      C   ...ce/.venv-swiftjepa/bin/python        386MiB |\n+-----------------------------------------------------------------------------------------+"
+    },
+    "nvcc": {
+      "available": true,
+      "output": "nvcc: NVIDIA (R) Cuda compiler driver\nCopyright (c) 2005-2025 NVIDIA Corporation\nBuilt on Tue_Dec_16_07:23:41_PM_PST_2025\nCuda compilation tools, release 13.1, V13.1.115\nBuild cuda_13.1.r13.1/compiler.37061995_0"
+    },
+    "cpu_threads": {
+      "torch": 4,
+      "torch_interop": 192,
+      "opencv": 1
+    },
+    "tf32": {
+      "matmul": false,
+      "cudnn": false
+    },
+    "gpu": {
+      "available": true,
+      "index": 0,
+      "name": "NVIDIA GeForce RTX 4090",
+      "compute_capability": [
+        8,
+        9
+      ],
+      "total_memory_bytes": 50866487296,
+      "multiprocessor_count": 128
+    },
+    "torch_cuda_version": "12.6",
+    "torch_runtime_version": "2.14.0+cu126",
+    "cudnn_benchmark": false,
+    "cudnn_deterministic": false,
+    "float32_matmul_precision": "highest",
+    "opencv_runtime_version": "5.0.0"
+  }
+}

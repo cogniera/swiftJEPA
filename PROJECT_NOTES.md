@@ -2630,3 +2630,18 @@ samples, rejects stale summaries, and labels invalid timing runs. Five CPU
 tests pass, including malformed data, figure labels, and actual PNG export.
 Synthetic fixtures were visually checked; measured plots follow the first
 completed baseline. Plotting remains outside the timed A/B loops.
+
+## Pretrained official fp16 accuracy finding
+
+The first pretrained official eager quality run on the current RTX 4090 at
+`ca6d01a` fails the engine's required 0.999 cosine threshold. Mid-gray measures
+0.9987876795 and moving color bars 0.9977144501; the other five clips pass.
+Repeated calls reproduce all values. The untouched fp32 encoder, with TF32
+disabled, is the reference. The saved run config, environment, and per-clip
+metrics are in `benchmarks/results/c4_c5_20261014_02/eager_1/`.
+
+This attempt stopped before timing, so it has no latency claim. The required
+official fp16 baseline must still be measured as a comparator with its failed
+quality disclosed. That does not qualify an engine path or relax 0.999; every
+engine candidate must pass before performance benchmarking. Diagnose precision
+and use the fresh compiled profile before selecting engine changes.
