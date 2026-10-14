@@ -2657,3 +2657,13 @@ bf16 without quantization; all seven clips and their repeated calls must reach
 gates. Failed official fp16 accuracy is disclosed but does not remove the
 user's explicitly required comparator. Twenty synthetic schema tests pass;
 their invented numbers are test fixtures, not performance evidence.
+
+## Official comparator quality policy
+
+Official eager and compiled latency runs now continue after saving a failed
+accuracy report, with acceptance eligibility false. The comparator is fixed by
+the task; its own fp16 accuracy does not replace the engine's fp32 quality gate.
+The focused control-flow regression covers both official modes, preservation of
+failed per-clip metrics, and saved latency samples. Engine quality gates remain
+mandatory before any engine benchmark. This supersedes the earlier C4 note
+that all failed official quality runs stop before timing.

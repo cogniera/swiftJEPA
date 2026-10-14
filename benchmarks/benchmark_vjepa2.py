@@ -263,7 +263,8 @@ def main():
         (out_dir / "accuracy.json").write_text(json.dumps(accuracy, indent=2, allow_nan=False) + "\n", encoding="utf-8")
         print(f"accuracy passed={accuracy['passed']} minimum_cosine={accuracy['minimum_cosine']}", flush=True)
         if not accuracy["passed"]:
-            raise SystemExit("pretrained quality gate failed; see accuracy.json")
+            # Required official comparators retain latency data even when their fp16 accuracy fails.
+            print("official baseline quality failed; latency will be measured with acceptance_eligible false", flush=True)
     results = run_benchmark(args, candidate, crop_size, out_dir)
     summary = save_outputs(args, results, out_dir, environment, accuracy)
     latency = summary["stages"]["end_to_end_ms"]

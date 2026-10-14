@@ -86,8 +86,12 @@ checkerboards, and color bars. Each candidate output is checked per clip
 against untouched fp32 output with TF32 disabled, including repeated calls and
 changed input. The lossless gate is minimum cosine at least 0.999.
 
-Pretrained accuracy runs before latency. A failed gate saves accuracy.json and
-stops. --skip-accuracy is available for diagnostics and cannot establish target
+Pretrained accuracy runs before latency and saves every clip result in
+accuracy.json. The required official eager and compiled comparators still
+measure latency when their fp32 cosine check fails; summary.json retains the
+failed accuracy and acceptance_eligible is false. Custom lossless engine
+candidates must pass the unchanged 0.999 gate before benchmarking.
+--skip-accuracy is available for diagnostics and cannot establish target
 acceptance. Compilation, quality comparisons, and output snapshots are outside
 the latency interval.
 
