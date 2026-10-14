@@ -63,6 +63,10 @@ def parse_args(argv=None):
         parser.error("batch, iterations, warmup and thread counts must be positive")
     if args.compile:
         args.warmup = max(args.warmup, 20)
+    device = torch.device(args.device)
+    if device.type != "cuda":
+        parser.error("--device must select a CUDA device")
+    args.device = f"cuda:{device.index if device.index is not None else 0}"
     return args
 
 
@@ -232,6 +236,8 @@ def main():
     out_dir = Path(args.out) if args.out else ROOT / "benchmarks" / "results" / tag
     out_dir.mkdir(parents=True, exist_ok=False)
     environment = collect_environment(ROOT, args.device)
+    (out_dir / "run.json").write_text(json.dumps({"config": vars(args), "environment": environment},
+                                                indent=2, allow_nan=False) + "\n", encoding="utf-8")
     print(f"building {args.model} pretrained={args.pretrained}", flush=True)
     encoder, crop_size = build_encoder(args)
     candidate = torch.compile(encoder, mode="max-autotune") if args.compile else encoder

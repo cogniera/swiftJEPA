@@ -19,6 +19,11 @@ from benchmarks.benchmark_vjepa2 import make_events, measure_iteration, parse_ar
 
 # Persist enough data to reconstruct statistics and reject an unvalidated quality claim.
 class OutputTests(unittest.TestCase):
+    def test_default_cuda_device_has_an_explicit_index(self):
+        self.assertEqual(parse_args([]).device, "cuda:0")
+        self.assertEqual(parse_args(["--device", "cuda"]).device, "cuda:0")
+        self.assertEqual(parse_args(["--device", "cuda:2"]).device, "cuda:2")
+
     def test_raw_samples_and_median_survive_serialization(self):
         samples = [{"end_to_end_ms": value, "wall_ms": value + 0.1,
                     "preprocess_cpu_ms": value - 1, "h2d_copy_ms": 0.2,
@@ -69,13 +74,14 @@ class OutputTests(unittest.TestCase):
 @unittest.skipUnless(torch.cuda.is_available(), "requires CUDA events")
 class CudaTimingTests(unittest.TestCase):
     def test_cpu_preprocessing_delay_is_in_end_to_end_metric(self):
-        device = torch.device("cuda", 0)
+        device = torch.device(parse_args([]).device)
 
         def preprocess(_):
             time.sleep(0.02)
             return torch.ones(1, 3, 2, 4, 4)
 
         with torch.cuda.device(device), torch.inference_mode():
+            torch.cuda.set_device(device)
             stream = torch.cuda.current_stream(device)
             events = make_events(stream)
             row = measure_iteration(lambda x: x + 1, preprocess, None, device,

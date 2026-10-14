@@ -2595,3 +2595,14 @@ latency. It exports operator input shapes, CPU/CUDA totals, and a Chrome trace
 without modifying the primary sample loop. Its three real CPU profiler tests
 pass, checking numerical output, trace operators/shapes, and exception cleanup.
 CUDA attribution and the first target profile follow GPU test validation.
+
+## First remote validation and device selection repair
+
+All 37 benchmark tests committed before C5 passed on the RTX 4090, including
+the real CUDA event test that includes a deliberate host preprocessing delay.
+The first benchmark invocation at `32fbf14` then failed before loading weights:
+`torch.cuda.set_device("cuda")` requires an explicit index in this runtime.
+Normalize the CLI default to `cuda:0` while preserving explicit indices, and
+exercise that default in both parser and CUDA tests. Write config/environment
+to `run.json` before model construction so later failures retain provenance.
+This failed attempt has zero latency samples and supplies no performance claim.
