@@ -2645,3 +2645,15 @@ official fp16 baseline must still be measured as a comparator with its failed
 quality disclosed. That does not qualify an engine path or relax 0.999; every
 engine candidate must pass before performance benchmarking. Diagnose precision
 and use the fresh compiled profile before selecting engine changes.
+
+## Lossless target comparison
+
+Added a saved-summary comparator that requires the target workload, matching
+source commit, GPU UUID, software stack, session, input fingerprint, and
+preprocessing semantics before interpreting a latency ratio. Both runs need
+at least 200 samples and p95/mean at most 1.3. Engine precision must be fp16 or
+bf16 without quantization; all seven clips and their repeated calls must reach
+0.999 vs fp32. Speedup at least 1.5 and median at most 12 ms are independent
+gates. Failed official fp16 accuracy is disclosed but does not remove the
+user's explicitly required comparator. Twenty synthetic schema tests pass;
+their invented numbers are test fixtures, not performance evidence.
